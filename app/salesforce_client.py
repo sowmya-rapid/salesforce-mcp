@@ -1,5 +1,7 @@
 import time
 import requests
+import xml.etree.ElementTree as ET
+
 from app.config import (
     SF_CLIENT_ID,
     SF_CLIENT_SECRET,
@@ -8,12 +10,14 @@ from app.config import (
     SF_TOKEN_URL,
     SF_API_VERSION,
 )
+from app.security import decrypt_token
 
 
 class SalesforceClient:
     def __init__(self):
         self.access_token = None
         self.issued_at = 0
+        self.refresh_token = decrypt_token(SF_REFRESH_TOKEN)
 
     # ---------------- AUTH ----------------
     def _refresh_token(self):
@@ -23,7 +27,7 @@ class SalesforceClient:
                 "grant_type": "refresh_token",
                 "client_id": SF_CLIENT_ID,
                 "client_secret": SF_CLIENT_SECRET,
-                "refresh_token": SF_REFRESH_TOKEN,
+                "refresh_token": self.refresh_token,
             },
         )
 
@@ -35,7 +39,7 @@ class SalesforceClient:
         self.issued_at = time.time()
 
     def _headers(self):
-        if not self.access_token:
+        if not self.access_token or time.time() - self.issued_at > 7000:
             self._refresh_token()
 
         return {
@@ -57,21 +61,18 @@ class SalesforceClient:
 
     # ---------------- LEADS ----------------
     def query(self, soql):
-        url = f"{SF_INSTANCE_URL}/services/data/{SF_API_VERSION}/query"
-        return self._request("GET", url, params={"q": soql})
+        return self._request(
+            "GET",
+            f"{SF_INSTANCE_URL}/services/data/{SF_API_VERSION}/query",
+            params={"q": soql},
+        )
 
     def create_lead(self, payload):
-        url = f"{SF_INSTANCE_URL}/services/data/{SF_API_VERSION}/sobjects/Lead/"
-        r = requests.post(url, json=payload, headers=self._headers())
-
-        if r.status_code == 400 and "DUPLICATES_DETECTED" in r.text:
-            data = r.json()[0]
-            lead_id = (
-                data["duplicateResult"]["matchResults"][0]
-                ["matchRecords"][0]["record"]["Id"]
-            )
-            self.update_lead(lead_id, payload)
-            return {"id": lead_id, "duplicate": True}
+        r = requests.post(
+            f"{SF_INSTANCE_URL}/services/data/{SF_API_VERSION}/sobjects/Lead/",
+            json=payload,
+            headers=self._headers(),
+        )
 
         if r.status_code >= 400:
             raise RuntimeError(r.text)
@@ -79,41 +80,81 @@ class SalesforceClient:
         return {"id": r.headers["Location"].split("/")[-1]}
 
     def update_lead(self, lead_id, payload):
-        url = f"{SF_INSTANCE_URL}/services/data/{SF_API_VERSION}/sobjects/Lead/{lead_id}"
-        self._request("PATCH", url, json=payload)
+        self._request(
+            "PATCH",
+            f"{SF_INSTANCE_URL}/services/data/{SF_API_VERSION}/sobjects/Lead/{lead_id}",
+            json=payload,
+        )
 
     def delete_lead(self, lead_id):
-        url = f"{SF_INSTANCE_URL}/services/data/{SF_API_VERSION}/sobjects/Lead/{lead_id}"
-        self._request("DELETE", url)
+        self._request(
+            "DELETE",
+            f"{SF_INSTANCE_URL}/services/data/{SF_API_VERSION}/sobjects/Lead/{lead_id}",
+        )
 
     # ---------------- SOAP CONVERSION ----------------
-    def convert_lead(self, lead_id):
-        if not self.access_token:
-            self._refresh_token()
+    def convert_lead(self, lead_id: str) -> dict:
+        # REST idempotency check
+        lead = self._request(
+            "GET",
+            f"{SF_INSTANCE_URL}/services/data/{SF_API_VERSION}/sobjects/Lead/{lead_id}",
+        )
+
+        if lead.get("IsConverted"):
+            return {
+                "lead_id": lead_id,
+                "status": "Converted",
+                "idempotent": True,
+            }
 
         url = f"{SF_INSTANCE_URL}/services/Soap/u/{SF_API_VERSION}"
 
         soap = f"""
         <soapenv:Envelope xmlns:soapenv="http://schemas.xmlsoap.org/soap/envelope/"
-                        xmlns:urn="urn:enterprise.soap.sforce.com">
-        <soapenv:Header>
+                          xmlns:urn="urn:partner.soap.sforce.com">
+          <soapenv:Header>
             <urn:SessionHeader>
-            <urn:sessionId>{self.access_token}</urn:sessionId>
+              <urn:sessionId>{self.access_token}</urn:sessionId>
             </urn:SessionHeader>
-        </soapenv:Header>
-        <soapenv:Body>
+          </soapenv:Header>
+          <soapenv:Body>
             <urn:convertLead>
-            <urn:leadConverts>
+              <urn:leadConverts>
                 <urn:leadId>{lead_id}</urn:leadId>
+                <urn:convertedStatus>Qualified</urn:convertedStatus>
                 <urn:doNotCreateOpportunity>true</urn:doNotCreateOpportunity>
-            </urn:leadConverts>
+              </urn:leadConverts>
             </urn:convertLead>
-        </soapenv:Body>
+          </soapenv:Body>
         </soapenv:Envelope>
         """
 
-        r = requests.post(url, data=soap, headers={"Content-Type": "text/xml"})
-        if r.status_code >= 400:
-            raise RuntimeError(r.text)
+        for attempt in range(3):
+            r = requests.post(
+                url,
+                data=soap,
+                headers={"Content-Type": "text/xml", "SOAPAction": "convertLead"},
+            )
 
-        return True
+            root = ET.fromstring(r.text)
+            success = root.find(".//{urn:partner.soap.sforce.com}success")
+
+            if success is not None and success.text == "true":
+                return {"lead_id": lead_id, "status": "Converted", "idempotent": False}
+
+            time.sleep(2 ** attempt)
+
+        # final REST check
+        lead = self._request(
+            "GET",
+            f"{SF_INSTANCE_URL}/services/data/{SF_API_VERSION}/sobjects/Lead/{lead_id}",
+        )
+
+        if lead.get("IsConverted"):
+            return {
+                "lead_id": lead_id,
+                "status": "Converted",
+                "idempotent": True,
+            }
+
+        raise RuntimeError("Lead conversion failed after retries")
