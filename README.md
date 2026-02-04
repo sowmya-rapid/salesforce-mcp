@@ -1,60 +1,205 @@
 # Salesforce MCP Server
 
-A TRD-compliant Salesforce CRM integration implemented as an MCP (Model Context Protocol) server.  
-It exposes Salesforce Lead operations as safe, deterministic tools for AI agents and workflows.
+A **Model Context Protocol (MCP)** server for **Salesforce CRM integration**. This server provides tools to interact with Salesforce Leads through the MCP protocol, enabling AI assistants, workflows, and copilots to manage Salesforce CRM lead data safely.
+
+---
 
 ## Features
-- OAuth 2.0 (refresh-token flow)
-- Lead CRUD operations
-- Lead conversion via SOAP
-- Idempotent lead sync
-- Safe handling of disqualified leads
-- Full audit logging (TRD requirement)
-- Windows + PowerShell friendly
 
+### Lead Sync Integration 
+- **Automated Lead Syncing**: Sync leads from your platform into Salesforce CRM using a safe upsert-like flow
+- **Duplicate Prevention**: Checks existing leads by email before creating a new one
+- **Idempotent Operations**: Safe to call multiple times with the same data - no duplicates
+- **Lead Status Handling**:
+  - `scheduled` → triggers Lead Conversion
+  - `objected` → updates Lead status only (no conversion)
+- **SOQL Safe Queries**: Email values are escaped to prevent query-breaking characters
+- **Error Handling**: Clear validation and authentication errors returned in JSON format
+- **Correlation IDs**: Every tool response contains a correlation ID for debugging
 
+---
 
-## Environment Variables
-Create a `.env` file:
+### Lead Management
+- **Full CRUD Operations**: Complete lead management capabilities
+  - List leads with limit support
+  - Get lead by email
+  - Create new lead
+  - Update existing lead fields
+  - Delete lead
+  - Update lead status
+  - Sync lead (upsert by email)
 
-SF_CLIENT_ID=your_client_id   
-SF_CLIENT_SECRET=your_client_secret   
-SF_REFRESH_TOKEN=your_refresh_token   
-SF_INSTANCE_URL=https://your-org.my.salesforce.com   
-SF_TOKEN_URL=https://login.salesforce.com/services/oauth2/token   
-SF_API_VERSION=v59.0
+---
 
+### Technical Features
+- **OAuth Integration**: Accepts Salesforce bearer tokens via request headers
+- **Type-Safe**: Built with Pydantic schemas for strong validation
+- **Switch/Match Tool Routing**: Clean tool routing using `match case`
+- **CORS Support**: Fully configurable CORS support via `config.py`
+- **Streamable HTTP Transport**: Uses MCP `StreamableHTTPSessionManager`
+- **Postman Compatible**: Designed to work correctly with Postman MCP testing
 
-## Run (PowerShell)
+---
+
+## Prerequisites
+
+- Python 3.10 or higher
+- UV package manager
+- Salesforce OAuth access token + refresh token (from OAuth service)
+- Salesforce instance URL
+
+---
+
+## Installation
+
+1. Clone the repository:
+  ```bash
+    git clone <your-repo-url>
+    cd salesforce-mcp
+ ```
+2. Install dependencies using UV:
+ ```bash
+    uv sync add
+ ```
+
+# Edit .env and add your Salesforce config
+.env
+
+ ```bash
+    SF_CLIENT_ID=your_salesforce_client_id
+    SF_CLIENT_SECRET=your_salesforce_client_secret
+    
+    SF_TOKEN_URL=https://login.salesforce.com/services/oauth2/token
+    SF_INSTANCE_URL=https://yourInstance.my.salesforce.com
+    SF_API_VERSION=v59.0
+    
+    MCP_HOST=0.0.0.0
+    MCP_PORT=3333
+ ```
+
+# Authentication (Required Headers)
+This MCP server expects authentication tokens via headers.
+
+Required Headers Format
+```bash
+Authorization: Bearer <ACCESS_TOKEN>
+X-SF-Refresh-Token: Bearer <REFRESH_TOKEN>
+X-SF-Instance-Url: https://yourInstance.my.salesforce.com
+Content-Type: application/json
+Accept: application/json
+```
+
+⚠️ Important
+
+```bash
+Must include a space: Bearer <token>
+
+Authorization:Bearer <token> ❌ will fail
+
+Authorization: Bearer <token> ✅ correct
+```
+Usage
+Running the Server
+```bash
 uv run python -m app.server
+```
+
+Server will start on:
+```bash
+(http://0.0.0.0:3333)
+```
 
 
-## MCP Tools
-- list_leads  
-- salesforce_get_lead  
-- salesforce_create_lead  
-- salesforce_update_lead  
-- salesforce_delete_lead  
-- salesforce_update_lead_status  
-- salesforce_sync_lead  
 
-## Audit Logging
-All tool calls are logged with:
-- tool name
-- inputs (sanitized)
-- result & status
-- timestamp
-- correlation ID
+## Available Tools
 
-Logs are written to:
-logs/audit.log
+### 1. `salesforce_sync_lead`
+
+### 2. `salesforce_list_leads`
+
+### 3. `salesforce_get_lead`
+
+### 4. `salesforce_create_lead`
+
+### 5. `salesforce_update_lead`
+
+### 6. `salesforce_delete_lead`
+
+### 7. `salesforce_update_lead_status`
+
+# Response Format
+All tool responses return:
+
+```bash
+{
+  "success": true,
+  "data": {},
+  "correlation_id": "uuid",
+  "status_code": 200
+}
+```
+
+Validation Error Response
+If validation fails, the server returns:
+
+```bash
+{
+  "success": false,
+  "error": "Validation Error",
+  "details": [
+    {
+      "field": "email",
+      "message": "field required"
+    }
+  ],
+  "correlation_id": "uuid"
+}
+```
+# Authentication Error Response
+If required auth headers are missing, the server returns:
+
+```bash
+{
+  "error": {
+    "code": "AUTHENTICATION_REQUIRED",
+    "message": "Authentication required to access this resource",
+    "details": {
+      "authentication_requirements": [
+        {
+          "provider": "salesforce",
+          "auth_type": "bearer",
+          "header_name": "Authorization",
+          "header_format": "Bearer {access_token}",
+          "required_scopes": ["api", "refresh_token", "offline_access"],
+          "token_source": "access_token"
+        }
+      ]
+    }
+  }
+}
+```
 
 
-## TRD Compliance
-- OAuth refresh token flow
-- Deterministic MCP tools
-- Idempotent operations
-- Safe lead conversion
-- Full audit logging
+# Project Structure
+```bash
+salesforce-mcp/
+├── app/
+│   ├── server.py            # MCP server and tools
+│   ├── salesforce_client.py # Salesforce REST/SOAP client
+│   ├── schemas.py           # Pydantic request schemas
+│   ├── constants.py         # Lead status + Salesforce fields/constants
+│   ├── config.py            # Host/Port + CORS configuration
+│   ├── utils.py             # Correlation ID + token extraction + SOQL escaping
+├── tests/                   # (Optional) unit tests
+├── pyproject.toml
+├── .env.example
+├── README.md
+└── .gitignore
+```
 
 
+# License
+MIT License
+
+# Author
+Sowmya ( sowmya@rapidinnovation.dev)
