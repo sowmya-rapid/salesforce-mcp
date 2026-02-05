@@ -197,9 +197,37 @@ salesforce-mcp/
 └── .gitignore
 ```
 
+## 🐳 Docker Support
+   This project is fully containerized, allowing you to run the Salesforce MCP server without installing local dependencies.
+
+1. Build the Image
+From the root directory, run:
+
+```bash
+docker build -t salesforce-mcp .
+```
+
+2. Run the Container
+Ensure your .env file is populated with your Salesforce credentials, then run:
+
+```bash
+docker run -d -p 3333:3333 --name sf-server --env-file .env salesforce-mcp
+```
+
+3. Verify the Deployment
+   
+
+
+```bash
+docker logs sf-server
+```
+Check if the server is active by viewing the logs    
+INFO: Salesforce MCP Server active at 0.0.0.0:3333.
+
 
 # License
 MIT License
 
 # Author
 Sowmya ( sowmya@rapidinnovation.dev)
+
