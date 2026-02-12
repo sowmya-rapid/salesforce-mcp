@@ -1,8 +1,11 @@
-from app.config import SF_CLIENT_ID, SF_INSTANCE_URL
+from app.config import SF_CLIENT_ID
 
-def get_authorization_url(redirect_uri: str):
+SALESFORCE_AUTH_BASE = "https://login.salesforce.com/services/oauth2/authorize"
+
+
+def get_authorization_url(redirect_uri: str) -> str:
     return (
-        "https://login.salesforce.com/services/oauth2/authorize"
+        f"{SALESFORCE_AUTH_BASE}"
         f"?response_type=code"
         f"&client_id={SF_CLIENT_ID}"
         f"&redirect_uri={redirect_uri}"

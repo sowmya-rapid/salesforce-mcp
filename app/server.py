@@ -6,6 +6,9 @@ from app.audit_logger import audit_log
 from app.utils import generate_correlation_id
 from app.config import SF_INSTANCE_URL
 
+from app.oauth import get_authorization_url
+
+
 mcp = FastMCP("Salesforce MCP")
 sf = SalesforceClient()
 
@@ -282,6 +285,35 @@ def salesforce_sync_lead(
 
     audit_log("salesforce_sync_lead", {"email": email}, "synced", "success", cid)
     return response(True, {"lead_id": lead_id, "synced": True}, cid)
+
+
+@mcp.tool()
+def salesforce_get_authorization_url(redirect_uri: str) -> Dict:
+    """
+    Generates Salesforce OAuth authorization URL for one-time user consent.
+    Used only during initial setup.
+    """
+    cid = generate_correlation_id()
+
+    if not redirect_uri:
+        return response(False, error="redirect_uri required", cid=cid)
+
+    url = get_authorization_url(redirect_uri)
+
+    audit_log(
+        "salesforce_get_authorization_url",
+        {"redirect_uri": redirect_uri},
+        "generated",
+        "success",
+        cid,
+    )
+
+    return response(
+        True,
+        {"authorization_url": url},
+        cid=cid,
+    )
+
 
 
 if __name__ == "__main__":
